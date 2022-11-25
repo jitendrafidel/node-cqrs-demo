@@ -1,0 +1,119 @@
+service: gravitydemo
+	
+plugins:
+  - serverless-plugin-typescript
+  - serverless-dotenv-plugin
+
+custom:
+  serverlessPluginTypescript:
+    tsConfigFileLocation: './tsconfig.build.json'
+	
+provider:
+  stage: dev
+  name: aws
+  region: ap-south-1
+  runtime: nodejs14.x
+  timeout: 30
+  versionFunctions: false
+  environment:
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+    ORGANIZATION_RESOURCES_TABLE: Organization_Resources-${self:provider.stage}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:DescribeTable
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.ORGANIZATION_RESOURCES_TABLE}"
+    - Effect: Allow
+      Action:
+        - kinesis:PutRecord
+        - kinesis:PutRecords
+      Resource:
+        - Fn::GetAtt: [ kinesisStream, Arn ]
+
+functions:
+
+
+  # Invoke via lambda api from sqspoller.ts
+  lambdaToEventHandlers: 
+    handler: infrastructure/eventHandlers/lambda/lambdaToEventHandlers.handler
+
+  getResources:
+    handler: ports/http_query/getResources.handler
+    events:
+      - http:
+          cors: true
+          path: resource
+          method: get
+
+  getResource:
+    handler: ports/http_query/getResource.handler
+    events:
+      - http:
+          cors: true
+          path: resource/{resourceId}
+          method: get
+
+  createResource:
+    handler: ports/http_command/resourceHandler.handler
+    events:
+      - http:
+          cors: true
+          path: resource
+          method: post
+
+  updateResource:
+    handler: ports/http_command/resourceHandler.handler
+    events:
+      - http:
+          cors: true
+          path: resource/{resourceId}
+          method: put
+
+  consumer:
+    handler: infrastructure/eventHandlers/lambda/lambdaToEventHandlers.resourceCreatedEventHandler
+    events:
+      - stream:
+          type: kinesis
+          arn:
+            Fn::GetAtt:
+              - kinesisStream
+              - Arn
+        
+  deleteResourceById:
+    handler: ports/http_command/resourceHandler.handler
+    events:
+      - http:
+          cors: true
+          path: resource/{resourceId}
+          method: delete
+
+
+resources:
+  Resources:
+    OrganizationResourcesListTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ORGANIZATION_RESOURCES_TABLE}
+        AttributeDefinitions:
+          - AttributeName: resourceId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: resourceId
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+    kinesisStream:
+      Type: AWS::Kinesis::Stream
+      Properties:
+        Name: eventStream
+        RetentionPeriodHours: 24
+        ShardCount: 1     
+
+
+
